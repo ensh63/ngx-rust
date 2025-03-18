@@ -70,12 +70,12 @@ impl NgxHttpOrigDstCtx {
 static NGX_HTTP_ORIG_DST_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
     preconfiguration: Some(Module::preconfiguration),
     postconfiguration: Some(Module::postconfiguration),
-    create_main_conf: Some(Module::create_main_conf),
-    init_main_conf: Some(Module::init_main_conf),
-    create_srv_conf: Some(Module::create_srv_conf),
-    merge_srv_conf: Some(Module::merge_srv_conf),
-    create_loc_conf: Some(Module::create_loc_conf),
-    merge_loc_conf: Some(Module::merge_loc_conf),
+    create_main_conf: None, //Some(Module::create_main_conf),
+    init_main_conf: None, //Some(Module::init_main_conf),
+    create_srv_conf: None, //Some(Module::create_srv_conf),
+    merge_srv_conf: None, //Some(Module::merge_srv_conf),
+    create_loc_conf: None, //Some(Module::create_loc_conf),
+    merge_loc_conf: None, //Some(Module::merge_loc_conf),
 };
 
 // Generate the `ngx_modules` table with exported modules.
@@ -259,10 +259,6 @@ http_variable_get!(
 struct Module;
 
 impl HTTPModule for Module {
-    type MainConf = ();
-    type SrvConf = ();
-    type LocConf = ();
-
     // static ngx_int_t ngx_http_orig_dst_add_variables(ngx_conf_t *cf)
     unsafe extern "C" fn preconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
         for mut v in NGX_HTTP_ORIG_DST_VARS {

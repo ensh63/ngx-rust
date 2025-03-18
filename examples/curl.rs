@@ -6,20 +6,18 @@ use ngx::ffi::{
     ngx_http_phases_NGX_HTTP_ACCESS_PHASE, ngx_int_t, ngx_module_t, ngx_str_t, ngx_uint_t, NGX_CONF_TAKE1,
     NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE,
 };
-use ngx::http::{self, HTTPModule, MergeConfigError, NgxHttpConfExt};
-use ngx::{http_request_handler, ngx_http_module_conf, ngx_log_debug_http, ngx_string};
+use ngx::http::{self, HTTPModule, MergeConfigError};
+use ngx::http::{HttpModuleConf, HttpModuleMainConf, HttpModuleLocConf, NgxHttpCoreModule};
+use ngx::{http_request_handler, ngx_log_debug_http, ngx_string};
 
 struct Module;
 
-impl http::HTTPModule for Module {
-    type MainConf = ();
-    type SrvConf = ();
-    type LocConf = ModuleConfig;
 
+
+impl http::HTTPModule for Module {
     unsafe extern "C" fn postconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
-        let cmcf = (*cf)
-            .get_http_module_conf_mut::<ngx::ffi::ngx_http_core_main_conf_t>()
-            .expect("http core main conf");
+        let cmcf = NgxHttpCoreModule::main_conf_mut(cf)
+                       .expect("http core main conf");
 
         let h = ngx_array_push(&mut cmcf.phases[ngx_http_phases_NGX_HTTP_ACCESS_PHASE as usize].handlers)
             as *mut ngx_http_handler_pt;
@@ -37,7 +35,18 @@ struct ModuleConfig {
     enable: bool,
 }
 
-ngx_http_module_conf!(Location, ngx_http_curl_module, ModuleConfig);
+impl HttpModuleConf for Module {
+    fn module() -> &'static ngx_module_t {
+        unsafe {
+            &*::core::ptr::addr_of!(ngx_http_curl_module)
+        }
+    }
+}
+
+impl HttpModuleLocConf for Module {
+    type LocConf = ModuleConfig;
+}
+
 
 static mut NGX_HTTP_CURL_COMMANDS: [ngx_command_t; 2] = [
     ngx_command_t {
@@ -54,10 +63,10 @@ static mut NGX_HTTP_CURL_COMMANDS: [ngx_command_t; 2] = [
 static NGX_HTTP_CURL_MODULE_CTX: ngx_http_module_t = ngx_http_module_t {
     preconfiguration: Some(Module::preconfiguration),
     postconfiguration: Some(Module::postconfiguration),
-    create_main_conf: Some(Module::create_main_conf),
-    init_main_conf: Some(Module::init_main_conf),
-    create_srv_conf: Some(Module::create_srv_conf),
-    merge_srv_conf: Some(Module::merge_srv_conf),
+    create_main_conf: None, //Some(Module::create_main_conf),
+    init_main_conf: None, //Some(Module::init_main_conf),
+    create_srv_conf: None, //Some(Module::create_srv_conf),
+    merge_srv_conf: None, //Some(Module::merge_srv_conf),
     create_loc_conf: Some(Module::create_loc_conf),
     merge_loc_conf: Some(Module::merge_loc_conf),
 };
@@ -87,9 +96,8 @@ impl http::Merge for ModuleConfig {
 }
 
 http_request_handler!(curl_access_handler, |request: &mut http::Request| {
-    let co = request
-        .get_http_module_conf::<ModuleConfig>()
-        .expect("module config is none");
+    let co = Module::loc_conf(request)
+                .expect("module config is none");
 
     ngx_log_debug_http!(request, "curl module enabled: {}", co.enable);
 

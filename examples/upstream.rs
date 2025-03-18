@@ -18,9 +18,10 @@ use ngx::ffi::{
     ngx_uint_t, NGX_CONF_NOARGS, NGX_CONF_TAKE1, NGX_CONF_UNSET, NGX_ERROR, NGX_HTTP_MODULE, NGX_HTTP_SRV_CONF_OFFSET,
     NGX_HTTP_UPS_CONF, NGX_LOG_EMERG,
 };
-use ngx::http::{HTTPModule, Merge, MergeConfigError, NgxHttpConfExt, Request};
+use ngx::http::{HTTPModule, Merge, MergeConfigError, Request};
+use ngx::http::{HttpModuleConf, HttpModuleSrvConf, NgxHttpUpstreamModule};
 use ngx::{
-    http_upstream_init_peer_pt, ngx_conf_log_error, ngx_http_module_conf, ngx_log_debug_http, ngx_log_debug_mask,
+    http_upstream_init_peer_pt, ngx_conf_log_error, ngx_log_debug_http, ngx_log_debug_mask,
     ngx_string,
 };
 
@@ -32,8 +33,6 @@ struct SrvConfig {
     original_init_upstream: ngx_http_upstream_init_pt,
     original_init_peer: ngx_http_upstream_init_peer_pt,
 }
-
-ngx_http_module_conf!(Server, ngx_http_upstream_custom_module, SrvConfig);
 
 impl Default for SrvConfig {
     fn default() -> Self {
@@ -78,12 +77,12 @@ impl Default for UpstreamPeerData {
 static NGX_HTTP_UPSTREAM_CUSTOM_CTX: ngx_http_module_t = ngx_http_module_t {
     preconfiguration: Some(Module::preconfiguration),
     postconfiguration: Some(Module::postconfiguration),
-    create_main_conf: Some(Module::create_main_conf),
-    init_main_conf: Some(Module::init_main_conf),
+    create_main_conf: None, //Some(Module::create_main_conf),
+    init_main_conf: None, //Some(Module::init_main_conf),
     create_srv_conf: Some(Module::create_srv_conf),
     merge_srv_conf: Some(Module::merge_srv_conf),
-    create_loc_conf: Some(Module::create_loc_conf),
-    merge_loc_conf: Some(Module::merge_loc_conf),
+    create_loc_conf: None, //Some(Module::create_loc_conf),
+    merge_loc_conf: None, //Some(Module::merge_loc_conf),
 };
 
 static mut NGX_HTTP_UPSTREAM_CUSTOM_COMMANDS: [ngx_command_t; 2] = [
@@ -126,7 +125,7 @@ http_upstream_init_peer_pt!(
             return Status::NGX_ERROR;
         }
 
-        let hccf = match unsafe { *us }.get_http_module_conf::<SrvConfig>() {
+        let hccf = match Module::srv_conf(us) {
             Some(x) => x,
             None => return Status::NGX_ERROR,
         };
@@ -213,7 +212,7 @@ unsafe extern "C" fn ngx_http_upstream_init_custom(
 ) -> ngx_int_t {
     ngx_log_debug_mask!(DebugMask::Http, (*cf).log, "CUSTOM UPSTREAM peer init_upstream");
 
-    let hccf = unsafe { &*us }.get_http_module_conf_mut::<SrvConfig>();
+    let hccf = Module::srv_conf_mut(us);
     if hccf.is_none() {
         ngx_conf_log_error!(NGX_LOG_EMERG, cf, "CUSTOM UPSTREAM no upstream srv_conf");
         return isize::from(Status::NGX_ERROR);
@@ -265,8 +264,7 @@ unsafe extern "C" fn ngx_http_upstream_commands_set_custom(
         ccf.max = n as u32;
     }
 
-    let uscf = (*cf)
-        .get_http_module_conf_mut::<ngx_http_upstream_srv_conf_t>()
+    let uscf = NgxHttpUpstreamModule::srv_conf_mut(cf)
         .expect("http upstream srv conf");
 
     ccf.original_init_upstream = if uscf.peer.init_upstream.is_some() {
@@ -288,10 +286,6 @@ unsafe extern "C" fn ngx_http_upstream_commands_set_custom(
 struct Module;
 
 impl HTTPModule for Module {
-    type MainConf = ();
-    type SrvConf = SrvConfig;
-    type LocConf = ();
-
     unsafe extern "C" fn create_srv_conf(cf: *mut ngx_conf_t) -> *mut c_void {
         let mut pool = Pool::from_ngx_pool((*cf).pool);
         let conf = pool.alloc_type::<SrvConfig>();
@@ -309,4 +303,16 @@ impl HTTPModule for Module {
         ngx_log_debug_mask!(DebugMask::Http, (*cf).log, "CUSTOM UPSTREAM end create_srv_conf");
         conf as *mut c_void
     }
+}
+
+impl HttpModuleConf for Module {
+    fn module() -> &'static ngx_module_t {
+        unsafe {
+            &*::core::ptr::addr_of!(ngx_http_upstream_custom_module)
+        }
+    }
+}
+
+impl HttpModuleSrvConf for Module {
+    type SrvConf = SrvConfig;
 }
