@@ -188,6 +188,15 @@ impl From<ngx_str_t> for &[u8] {
     }
 }
 
+impl From<&'static [u8]> for ngx_str_t {
+    fn from(s: &'static [u8]) -> Self {
+        ngx_str_t {
+            data: s.as_ptr() as *mut u8,
+            len: s.len(),
+        }
+    }
+}
+
 impl hash::Hash for ngx_str_t {
     fn hash<H: hash::Hasher>(&self, state: &mut H) {
         self.as_bytes().hash(state)

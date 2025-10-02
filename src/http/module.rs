@@ -74,14 +74,37 @@ pub trait HttpModule {
         Status::NGX_OK.into()
     }
 
+    /// Returns an iterator over variables provided by this module.
+    fn variables() -> impl Iterator<Item = &'static super::NgxVar> {
+        core::iter::empty::<&'static super::NgxVar>()
+    }
+
+    /// Register all variables provided by this module.
+    ///
     /// # Safety
     ///
     /// Callers should provide valid non-null `ngx_conf_t` arguments. Implementers must
     /// guard against null inputs or risk runtime errors.
-    unsafe extern "C" fn preconfiguration(_cf: *mut ngx_conf_t) -> ngx_int_t {
+    unsafe fn register_variables(cf: *mut ngx_conf_t) -> ngx_int_t {
+        let cf = unsafe { &mut *cf };
+        for v in Self::variables() {
+            if !v.add(cf) {
+                return Status::NGX_ERROR.into();
+            }
+        }
         Status::NGX_OK.into()
     }
 
+    /// Preconfiguration hook. Default implementation registers variables.
+    /// # Safety
+    ///
+    /// Callers should provide valid non-null `ngx_conf_t` arguments. Implementers must
+    /// guard against null inputs or risk runtime errors.
+    unsafe extern "C" fn preconfiguration(cf: *mut ngx_conf_t) -> ngx_int_t {
+        Self::register_variables(cf)
+    }
+
+    /// Postconfiguration hook. Default implementation registers request handlers.
     /// # Safety
     ///
     /// Callers should provide valid non-null `ngx_conf_t` arguments. Implementers must
