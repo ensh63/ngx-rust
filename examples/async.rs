@@ -4,14 +4,14 @@ use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
-use ngx::core;
+use ngx::core::{self, NgxError};
 use ngx::ffi::{
     ngx_array_push, ngx_command_t, ngx_conf_t, ngx_connection_t, ngx_event_t, ngx_http_handler_pt,
     ngx_http_module_t, ngx_http_phases_NGX_HTTP_ACCESS_PHASE, ngx_int_t, ngx_module_t,
     ngx_post_event, ngx_posted_events, ngx_posted_next_events, ngx_str_t, ngx_uint_t,
     NGX_CONF_TAKE1, NGX_HTTP_LOC_CONF, NGX_HTTP_LOC_CONF_OFFSET, NGX_HTTP_MODULE, NGX_LOG_EMERG,
 };
-use ngx::http::{self, HttpModule, MergeConfigError};
+use ngx::http::{self, HttpModule, HttpRequestContext, MergeConfigError};
 use ngx::http::{HttpModuleLocationConf, HttpModuleMainConf, NgxHttpCoreModule};
 use ngx::{http_request_handler, ngx_conf_log_error, ngx_log_debug_http, ngx_string};
 use tokio::runtime::Runtime;
@@ -117,6 +117,10 @@ struct RequestCTX {
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
+impl HttpRequestContext for Module {
+    type RequestCtx = RequestCTX;
+}
+
 impl Default for RequestCTX {
     fn default() -> Self {
         Self {
@@ -148,49 +152,40 @@ http_request_handler!(async_access_handler, |request: &mut http::Request| {
         return core::NGX_RES_DECLINED;
     }
 
-    if let Some(ctx) = request.get_module_ctx::<RequestCTX>(Module::module()) {
-        if !ctx.done.load(Ordering::Relaxed) {
-            return core::NGX_RES_AGAIN;
-        }
+    let (ctx, is_new) = Module::get_or_init_context::<NgxError>(request, |request, ctx| {
+        ctx.event.handler = Some(check_async_work_done);
+        ctx.event.data = request.connection().cast();
+        ctx.event.log = unsafe { (*request.connection()).log };
+        unsafe { ngx_post_event(&mut ctx.event, addr_of_mut!(ngx_posted_next_events)) };
+        // Request is no longer needed and can be converted to something movable to the async block
+        let req = AtomicPtr::new(request.into());
+        let done_flag = ctx.done.clone();
 
+        let rt = ngx_http_async_runtime();
+        ctx.task = Some(rt.spawn(async move {
+            let start = Instant::now();
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            let req = unsafe { http::Request::from_ngx_http_request(req.load(Ordering::Relaxed)) };
+            // not really thread safe, we should apply all these operation in nginx thread
+            // but this is just an example. proper way would be storing these headers
+            // in the request ctx and apply them when we get back to the nginx thread.
+            req.add_header_out(
+                "X-Async-Time",
+                start.elapsed().as_millis().to_string().as_str(),
+            );
+
+            done_flag.store(true, Ordering::Release);
+            // there is a small issue here. If traffic is low we may get stuck behind a 300ms timer
+            // in the nginx event loop. To workaround it we can notify the event loop using
+            // pthread_kill( nginx_thread, SIGIO ) to wake up the event loop. (or patch nginx
+            // and use the same trick as the thread pool)
+        }));
+        Ok(())
+    })?;
+
+    if !is_new && unsafe { ctx.as_ref() }.done.load(Ordering::Relaxed) {
         return core::NGX_RES_OK;
     }
-
-    let ctx = request.pool().alloc_with_cleanup(RequestCTX::default());
-    if ctx.is_null() {
-        return core::NGX_RES_ERROR;
-    }
-    request.set_module_ctx(ctx.cast(), Module::module());
-
-    let ctx = unsafe { &mut *ctx };
-    ctx.event.handler = Some(check_async_work_done);
-    ctx.event.data = request.connection().cast();
-    ctx.event.log = unsafe { (*request.connection()).log };
-    unsafe { ngx_post_event(&mut ctx.event, addr_of_mut!(ngx_posted_next_events)) };
-
-    // Request is no longer needed and can be converted to something movable to the async block
-    let req = AtomicPtr::new(request.into());
-    let done_flag = ctx.done.clone();
-
-    let rt = ngx_http_async_runtime();
-    ctx.task = Some(rt.spawn(async move {
-        let start = Instant::now();
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let req = unsafe { http::Request::from_ngx_http_request(req.load(Ordering::Relaxed)) };
-        // not really thread safe, we should apply all these operation in nginx thread
-        // but this is just an example. proper way would be storing these headers in the request ctx
-        // and apply them when we get back to the nginx thread.
-        req.add_header_out(
-            "X-Async-Time",
-            start.elapsed().as_millis().to_string().as_str(),
-        );
-
-        done_flag.store(true, Ordering::Release);
-        // there is a small issue here. If traffic is low we may get stuck behind a 300ms timer
-        // in the nginx event loop. To workaround it we can notify the event loop using
-        // pthread_kill( nginx_thread, SIGIO ) to wake up the event loop. (or patch nginx
-        // and use the same trick as the thread pool)
-    }));
 
     core::NGX_RES_AGAIN
 });

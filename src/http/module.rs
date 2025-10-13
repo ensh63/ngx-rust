@@ -1,12 +1,12 @@
 use core::error;
 use core::ffi::{c_char, c_void};
 use core::fmt;
-use core::ptr;
+use core::ptr::{self, NonNull};
 
 use crate::core::NGX_CONF_ERROR;
 use crate::core::*;
 use crate::ffi::*;
-use crate::http::RequestHandler;
+use crate::http::{Request, RequestHandler};
 
 /// MergeConfigError - configuration cannot be merged with levels above.
 #[derive(Debug)]
@@ -204,5 +204,57 @@ pub trait HttpModule {
             Ok(_) => ptr::null_mut(),
             Err(_) => NGX_CONF_ERROR as _,
         }
+    }
+}
+
+/// The `HttpRequestContext` trait provides methods for managing request-specific context data.
+pub trait HttpRequestContext: HttpModule {
+    /// The type of the context data associated with the request.
+    type RequestCtx: Sized;
+
+    /// Get module context from request.
+    fn get_context(request: &mut Request) -> Option<NonNull<Self::RequestCtx>> {
+        request
+            .get_module_ctx_mut::<Self::RequestCtx>(Self::module())
+            .map(NonNull::from)
+    }
+
+    /// Get or initialize module context in request.
+    fn get_or_init_context<E: From<crate::allocator::AllocError>>(
+        request: &mut Request,
+        init: impl FnOnce(&mut Request, &mut Self::RequestCtx) -> Result<(), E>,
+    ) -> Result<(NonNull<Self::RequestCtx>, bool), E> {
+        match Self::get_context(request) {
+            Some(ctx) => Ok((ctx, false)),
+            None => {
+                let new_ctx = request
+                    .pool()
+                    .allocate_with_cleanup::<Self::RequestCtx, E>(|ctx| {
+                        init(request, unsafe { &mut *ctx })
+                    })?;
+                request.set_module_ctx(new_ctx.as_ptr() as _, Self::module());
+                Ok((new_ctx, true))
+            }
+        }
+    }
+
+    /// Get or initialize module context in request with default value.
+    fn get_or_default_context(request: &mut Request) -> NgxResult<(NonNull<Self::RequestCtx>, bool)>
+    where
+        Self::RequestCtx: Default,
+    {
+        Self::get_context(request).map_or_else(
+            || {
+                let new_ctx = request
+                    .pool()
+                    .allocate_with_cleanup::<Self::RequestCtx, NgxError>(|ctx| {
+                        unsafe { ctx.write(Self::RequestCtx::default()) };
+                        Ok(())
+                    })?;
+                request.set_module_ctx(new_ctx.as_ptr() as _, Self::module());
+                Ok((new_ctx, true))
+            },
+            |ctx| Ok((ctx, false)),
+        )
     }
 }

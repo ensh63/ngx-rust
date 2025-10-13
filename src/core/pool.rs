@@ -243,6 +243,30 @@ impl Pool {
         }
     }
 
+    /// Allocates memory for a type from the pool and initializes it using the provided closure.
+    /// The closure:
+    ///  - returns `true` if all initialization steps were successful. In this case, a cleanup
+    ///    handler will be added to the pool and a typed pointer to the allocated memory will be
+    ///    returned.
+    ///  - returns `false` if any initialization step failed. The allocated memory must be cleared
+    ///    allowing safe deallocation. In this case, the allocated memory will be dropped and
+    ///    `Err(AllocError)` will be returned.
+    pub fn allocate_with_cleanup<T, E>(
+        &self,
+        init: impl FnOnce(*mut T) -> Result<(), E>,
+    ) -> Result<NonNull<T>, E>
+    where
+        E: From<AllocError>,
+    {
+        unsafe {
+            let p = self.allocate(Layout::new::<T>())?.cast::<T>().as_ptr();
+            init(p)
+                .and_then(|_| self.add_cleanup_for_value(p).map_err(|_| AllocError.into()))
+                .inspect_err(|_| ptr::drop_in_place(p))?;
+            Ok(NonNull::new_unchecked(p))
+        }
+    }
+
     /// Allocates unaligned memory from the pool of the specified size.
     ///
     /// Returns Result::Ok with a typed pointer to the allocated memory if successful,

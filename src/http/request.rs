@@ -223,7 +223,7 @@ impl Request {
     }
 
     /// Get Module context pointer
-    fn get_module_ctx_ptr(&self, module: &ngx_module_t) -> *mut c_void {
+    pub(crate) fn get_module_ctx_ptr(&self, module: &ngx_module_t) -> *mut c_void {
         unsafe { *self.0.ctx.add(module.ctx_index) }
     }
 
@@ -235,10 +235,18 @@ impl Request {
         unsafe { ctx.as_ref() }
     }
 
+    /// Get mutable Module context
+    pub fn get_module_ctx_mut<T>(&mut self, module: &ngx_module_t) -> Option<&mut T> {
+        let ctx = self.get_module_ctx_ptr(module).cast::<T>();
+        // SAFETY: ctx is either NULL or allocated with ngx_p(c)alloc and
+        // explicitly initialized by the module
+        unsafe { ctx.as_mut() }
+    }
+
     /// Sets the value as the module's context.
     ///
     /// See <https://nginx.org/en/docs/dev/development_guide.html#http_request>
-    pub fn set_module_ctx(&self, value: *mut c_void, module: &ngx_module_t) {
+    pub fn set_module_ctx(&mut self, value: *mut c_void, module: &ngx_module_t) {
         unsafe {
             *self.0.ctx.add(module.ctx_index) = value;
         };
@@ -250,7 +258,7 @@ impl Request {
     pub fn get_complex_value(&self, cv: &ngx_http_complex_value_t) -> Option<&NgxStr> {
         let r = (self as *const Request as *mut Request).cast();
         let val = cv as *const ngx_http_complex_value_t as *mut ngx_http_complex_value_t;
-        // SAFETY: `ngx_http_complex_value` does not mutate `r` or `val` and guarentees that
+        // SAFETY: `ngx_http_complex_value` does not mutate `r` or `val` and guarantees that
         // a valid Nginx string is stored in `value` if it successfully returns.
         unsafe {
             let mut value = ngx_str_t::default();

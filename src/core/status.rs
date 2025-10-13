@@ -2,7 +2,7 @@ use core::ffi::c_char;
 use core::fmt;
 use core::ptr;
 
-use allocator_api2::alloc::AllocError;
+use crate::allocator::AllocError;
 
 use crate::ffi::*;
 
