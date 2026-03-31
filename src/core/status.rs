@@ -2,6 +2,8 @@ use core::ffi::c_char;
 use core::fmt;
 use core::ptr;
 
+use crate::allocator::AllocError;
+
 use crate::ffi::*;
 
 /// Status
@@ -26,6 +28,21 @@ impl fmt::Debug for Status {
 impl From<Status> for ngx_int_t {
     fn from(val: Status) -> Self {
         val.0
+    }
+}
+
+impl<T> From<Result<T, Status>> for Status {
+    fn from(result: Result<T, Status>) -> Self {
+        match result {
+            Ok(_) => Status::NGX_OK,
+            Err(status) => status,
+        }
+    }
+}
+
+impl From<AllocError> for Status {
+    fn from(_: AllocError) -> Self {
+        Status::NGX_ERROR
     }
 }
 
