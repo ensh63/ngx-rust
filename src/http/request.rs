@@ -85,7 +85,8 @@ macro_rules! http_variable_get {
 /// in the `into_handler_status` method.
 ///
 /// There are predefined implementations for `ngx_int_t`, [`Status`], [`HTTPStatus`],
-/// [`Option`] with value type implementing [`IntoHandlerStatus`].
+/// [`Option`] with value type implementing [`IntoHandlerStatus`],
+/// and [`Result`] with value and error types implementing [`IntoHandlerStatus`].
 pub trait IntoHandlerStatus
 where
     Self: Sized,
@@ -101,6 +102,16 @@ where
     #[inline]
     fn into_handler_status(self, r: &Request) -> ngx_int_t {
         self.map(|val| val.into_handler_status(r)).unwrap_or(NGX_ERROR as _)
+    }
+}
+
+impl<T, E> IntoHandlerStatus for Result<T, E>
+where
+    T: IntoHandlerStatus,
+    E: IntoHandlerStatus,
+{
+    fn into_handler_status(self, r: &Request) -> ngx_int_t {
+        self.map_or_else(|err| err.into_handler_status(r), |val| val.into_handler_status(r))
     }
 }
 
